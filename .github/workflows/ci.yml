@@ -31,6 +31,16 @@ jobs:
       - name: Install cocotb
         run: pip install -r requirements.txt
 
+      # ccache is a *runtime* dependency, not just a build-time one: Verilator
+      # bakes "ccache g++" into the Vtop.mk it generates for compiling the DUT,
+      # so this is needed every run, cache hit or not - unlike the rest of the
+      # build deps below, which are only needed when actually compiling
+      # Verilator from source.
+      - name: Install ccache
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ccache
+
       # apt's Verilator is too old for cocotb 2.0.1 (needs >=5.036), so build
       # from source. Cached and keyed on VERILATOR_VERSION so this only runs
       # on a version bump, not every push.
@@ -44,9 +54,8 @@ jobs:
       - name: Install Verilator build dependencies
         if: steps.cache-verilator.outputs.cache-hit != 'true'
         run: |
-          sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            git help2man perl python3 make autoconf g++ flex bison ccache \
+            git help2man perl python3 make autoconf g++ flex bison \
             libgoogle-perftools-dev numactl perl-doc libfl2 libfl-dev zlib1g-dev
 
       - name: Build and install Verilator ${{ env.VERILATOR_VERSION }}
