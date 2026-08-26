@@ -40,7 +40,7 @@ always_ff @(posedge clk) begin
     rd_data <= rd_data_ram;
 end
 
-always_ff @(posedge clk or posedge rst) begin
+always_ff @(posedge clk) begin
     if (rst) begin
         rd_addr_r <= '0;
         wr_addr_r <= '0;
@@ -52,7 +52,7 @@ always_ff @(posedge clk or posedge rst) begin
     end
 end
 
-    // Update the count by 1, -1, or 0. 
+    // Update the count by 1, -1, or 0.
     // Using the optimization given by Stitt for counters
 always_comb begin
     case ({
