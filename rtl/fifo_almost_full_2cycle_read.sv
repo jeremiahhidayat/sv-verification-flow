@@ -67,8 +67,8 @@ end
 
 assign valid_wr = wr_en && !full;
 assign valid_rd = rd_en && !empty;
-assign almost_full = count_r == ALMOST_FULL_THRESHOLD;
-assign full = count_r == DEPTH;
+assign almost_full = count_r == COUNT_WIDTH'(ALMOST_FULL_THRESHOLD);
+assign full = count_r == COUNT_WIDTH'(DEPTH);
 assign empty = count_r == 0;
 
 endmodule

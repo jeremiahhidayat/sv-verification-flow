@@ -3,6 +3,14 @@ from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, ClockCycles
 from collections import deque
 
+async def reset_dut(dut):
+    dut.rst.value = 1
+    dut.wr_en.value = 0
+    dut.rd_en.value = 0
+    await ClockCycles(dut.clk, 2)
+    dut.rst.value = 0
+    await RisingEdge(dut.clk)
+
 @cocotb.test()
 async def test_write_then_read(dut):
     cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
