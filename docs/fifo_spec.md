@@ -12,7 +12,7 @@ achievable clock frequency (see F13). Parameterizable width and depth.
 |---|---|---|
 | `WIDTH` | 8 | Data width in bits |
 | `DEPTH` | 32 | Number of entries. Must be a power of 2. |
-| `ALMOST_FULL_THRESHOLD` | `DEPTH` | Occupancy at/above which `almost_full` asserts. Default of `DEPTH` makes `almost_full` coincide with `full` unless a caller overrides it — see open question in `verification_plan.md` §4. |
+| `ALMOST_FULL_THRESHOLD` | `DEPTH` | The exact occupancy at which `almost_full` asserts — `count == ALMOST_FULL_THRESHOLD`, **not** `>=` (see F10). Legal range `[1, DEPTH]`. Default of `DEPTH` makes `almost_full` coincide with `full` unless a caller overrides it — see open question in `verification_plan.md` §4. |
 
 `almost_empty` and `ALMOST_EMPTY_THRESH` have been **removed** in this revision —
 the module no longer exposes an almost-empty indicator.
@@ -29,7 +29,7 @@ the module no longer exposes an almost-empty indicator.
 | `rd_data` | out | `WIDTH` | Read data, registered through two pipeline stages; valid **two cycles** after a successful read is accepted (F13) — latency increased from one cycle in earlier revisions. |
 | `full` | out | 1 | Asserted when occupancy == `DEPTH`. |
 | `empty` | out | 1 | Asserted when occupancy == 0. |
-| `almost_full` | out | 1 | Asserted when occupancy >= `ALMOST_FULL_THRESHOLD`. |
+| `almost_full` | out | 1 | Asserted when occupancy **equals** `ALMOST_FULL_THRESHOLD` exactly. It is a point flag, not a threshold-and-above flag — it deasserts again as occupancy rises past the threshold (F10). |
 | `count` | out | `$clog2(DEPTH+1)` | Current occupancy (debug/verification visibility, not required by any consumer). |
 
 Reset is **synchronous** (sampled on the clock edge) to keep the fast-tier and Questa
@@ -96,9 +96,24 @@ is added to the corner-case list in §4.
   is dropped (there is nothing valid to dequeue this cycle); `count` becomes 1.
 - **F9** — Write and read pointers wrap modulo `DEPTH` independently; occupancy is
   tracked correctly across any number of wraps (verify at least 2 full wrap cycles).
-- **F10** — `almost_full` asserts and deasserts exactly at its configured
-  threshold, including at the extremes (`ALMOST_FULL_THRESHOLD == DEPTH`, the
-  default, and `ALMOST_FULL_THRESHOLD == 1`).
+- **F10** — `almost_full` is an **exact-match** occupancy flag: it asserts iff
+  `count == ALMOST_FULL_THRESHOLD` and is deasserted at every other occupancy,
+  *including occupancies above the threshold*. It is deliberately not a
+  `count >= ALMOST_FULL_THRESHOLD` sticky/threshold-and-above flag — earlier
+  revisions of this spec worded it that way, and the RTL is authoritative here.
+  Consequences a consumer must account for:
+  - With `ALMOST_FULL_THRESHOLD < DEPTH`, `almost_full` pulses for exactly the
+    cycles occupancy sits on the threshold and drops again as the FIFO keeps
+    filling — so `almost_full == 0` does **not** mean "there is room". A
+    consumer using it as back-pressure must latch it, not level-sample it.
+  - `almost_full && full` and `!almost_full && full` are both legal states:
+    the former when `ALMOST_FULL_THRESHOLD == DEPTH`, the latter when
+    `ALMOST_FULL_THRESHOLD < DEPTH`.
+  - At the `ALMOST_FULL_THRESHOLD == DEPTH` default the exact-match and
+    threshold-and-above readings are indistinguishable, since `count` can never
+    exceed `DEPTH`. Verification must therefore exercise at least one
+    sub-`DEPTH` threshold to cover the difference; `ALMOST_FULL_THRESHOLD == 1`
+    is the other extreme worth pinning.
 - **F11** — No overflow: stored data already in the FIFO is never corrupted or lost
   by a write attempted while full with no accompanying read (F4 holds under
   sustained back-pressure, not just a single cycle).

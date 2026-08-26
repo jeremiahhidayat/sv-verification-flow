@@ -17,7 +17,7 @@ mergeable metric. Every row below traces to a spec ID in `docs/fifo_spec.md`.
 | F7 | `test_simultaneous_rw_at_full` | `cx_wr_rd_full_empty` bin `wr&rd, full`; `a_no_overflow` |
 | F8 | `test_simultaneous_rw_at_empty` | `cx_wr_rd_full_empty` bin `wr&rd, empty`; `a_no_underflow` |
 | F9 | `test_pointer_wrap` (≥2 wraps) | `cp_occupancy` crossed with wrap count |
-| F10 | `test_almost_full_threshold` | `cp_occupancy` almost-full bins (incl. `ALMOST_FULL_THRESHOLD==DEPTH` default) |
+| F10 | `test_almost_full_threshold` | `cp_occupancy` threshold-1/threshold/threshold+1 bins; `cp_af_vs_full` |
 | F11 | `test_random_stress` (sustained full) | `a_no_overflow` (assertion, not just coverage) |
 | F12 | `test_random_stress` (sustained empty) | `a_no_underflow` |
 | F13 | every test's scoreboard timing check (2-cycle latency); `test_back_to_back_reads` | `a_read_latency` (2-cycle, see §3) |
@@ -35,10 +35,12 @@ plus a 2-entry pipeline model that mirrors the DUT's RAM-output-register +
 output-register stages so the reference `rd_data` becomes valid on the same
 cycle as the DUT's, not one cycle early. This matters — a scoreboard that only
 checks `rd_data` ordering will pass even if the flag logic or the latency is
-wrong (e.g., off-by-one on `almost_full`, or a reference model still assuming
-1-cycle read latency), and both are exactly the class of bug this revision's
-interface changes (renamed threshold parameter, dropped `almost_empty`, added
-pipeline stage) tend to introduce.
+wrong (e.g., a model that computes `almost_full` as `count >= THRESHOLD` when
+the DUT is exact-match `count == THRESHOLD`, or one still assuming 1-cycle read
+latency), and both are exactly the class of bug this revision's interface
+changes (renamed threshold parameter, dropped `almost_empty`, added pipeline
+stage) tend to introduce. The `almost_full` case in particular is invisible at
+the `ALMOST_FULL_THRESHOLD == DEPTH` default — see §4.
 
 Tests (each asserts against the reference model every cycle, not just at checkpoints):
 1. `test_reset` — F1
@@ -58,8 +60,13 @@ Tests (each asserts against the reference model every cycle, not just at checkpo
 9. `test_read_pipeline_bubble` — interleave accepted reads with cycles where
    `rd_en` is deasserted or dropped (F5/F8) and confirm `rd_data` never shows a
    bubble/garbage value 2 cycles after a non-accepted read — F16
-10. `test_almost_full_threshold` — sweep `ALMOST_FULL_THRESHOLD` including the
-    `DEPTH` default (coincides with `full`) and `1` — F10
+10. `test_almost_full_threshold` — walk occupancy one entry at a time from `0`
+    up to `DEPTH` and back down, checking `almost_full` at every step. Because
+    the flag is exact-match, the walk must confirm it **deasserts again above**
+    the threshold, not just that it asserts at it. Parameterize over
+    `ALMOST_FULL_THRESHOLD` in `{1, DEPTH/2, DEPTH}` — the `DEPTH` default
+    (coincides with `full`) cannot distinguish `==` from `>=`, so at least one
+    sub-`DEPTH` value is mandatory here, not optional — F10
 11. `test_random_stress` — randomized `wr_en`/`rd_en`/data vs. reference model,
     run with a fixed seed logged on failure for reproducibility
 
@@ -70,11 +77,23 @@ above stays checkable by grep, not by memory.
 ## 3. Questa tier — coverage + assertions (`tb/sv/`)
 
 **Covergroups:**
-- `cp_occupancy`: bins for `0`, low-mid range, mid-range,
-  `ALMOST_FULL_THRESHOLD..DEPTH-1`, `DEPTH` — plus explicit bins at the exact
-  threshold boundary (F10 requires hitting the boundary, not just "near" it),
-  and at the `ALMOST_FULL_THRESHOLD == DEPTH` default so the "coincides with
-  full" case is exercised, not just custom-threshold instantiations.
+- `cp_occupancy`: bins for `0`, the mid-range spread, and `DEPTH`, plus three
+  explicit single-value bins around the threshold —
+  `ALMOST_FULL_THRESHOLD-1`, `ALMOST_FULL_THRESHOLD`, `ALMOST_FULL_THRESHOLD+1`
+  (each clamped into `[0, DEPTH]`). All three are required, not just the middle
+  one: `almost_full` is an **exact-match** flag (F10), so the bin *above* the
+  threshold is what proves it deasserts again as the FIFO keeps filling. A
+  range bin like `ALMOST_FULL_THRESHOLD..DEPTH-1` would have been the right
+  shape for a `>=` flag and is the wrong shape here — it can close without ever
+  landing on the threshold itself.
+- `cp_af_vs_full`: the `{almost_full, full}` pair, with all four combinations
+  binned. At the `ALMOST_FULL_THRESHOLD == DEPTH` default only `neither` and
+  `af_and_full` are reachable, which is the "coincides with full" case. The
+  other two — `af_only` (occupancy sitting exactly on a sub-`DEPTH` threshold)
+  and `full_only` (occupancy above it, flag already dropped) — are reachable
+  only from a second elaboration with `ALMOST_FULL_THRESHOLD < DEPTH`, so they
+  are the bins that force that instantiation to actually be run rather than
+  assumed (see §4).
 - `cx_wr_rd_full_empty`: cross of `(wr_en, rd_en, full, empty)`, with illegal
   combinations (`full && empty` when `DEPTH>1`) excluded and documented as an
   exclusion, not silently dropped — an unexplained exclusion is worse than no
@@ -107,9 +126,11 @@ versa) since it exercises a path the cocotb reset test only checks at rest, not
 mid-burst.
 
 **Run/merge** (already in the prep plan, repeated here for the traceability):
-3–5 seeds → `vcover merge` → `vcover report -html`. Signoff target: 100% of
-`cp_occupancy` and `cx_wr_rd_full_empty` bins hit, all 3 assertions pass across
-every seed, zero unjustified exclusions.
+3–5 seeds → `vcover merge` → `vcover report -html`. The merge must span at least
+two elaborations — the `ALMOST_FULL_THRESHOLD == DEPTH` default and one
+sub-`DEPTH` threshold — or `cp_af_vs_full` cannot close (§4). Signoff target:
+100% of `cp_occupancy`, `cx_wr_rd_full_empty` and `cp_af_vs_full` bins hit, all
+5 assertions pass across every seed, zero unjustified exclusions.
 
 ## 4. Gaps to close before writing RTL
 
@@ -140,12 +161,21 @@ every seed, zero unjustified exclusions.
   for free from the unmoved read address, not from a reset or enable — worth a
   targeted test (`test_read_pipeline_bubble`) rather than an SVA, since it's a
   consequence of address stability, not an explicit rule.
-- **Open question — `ALMOST_FULL_THRESHOLD` default equals `DEPTH`.** This makes
-  `almost_full` functionally identical to `full` unless a caller overrides the
-  parameter. Confirm this is intentional (e.g., a "safe" out-of-box default that
-  callers are expected to override) rather than an oversight, since it changes
-  what the default-instantiation `cp_occupancy` almost-full bin actually
-  exercises.
+- **Resolved — `almost_full` is exact-match (`count == ALMOST_FULL_THRESHOLD`),
+  not `count >= ALMOST_FULL_THRESHOLD`.** The RTL (`rtl/...sv`) is authoritative
+  here; earlier revisions of `fifo_spec.md` worded F10 as `>=` and have been
+  corrected. Both reference models must use `==`. The flag deasserts again as
+  occupancy rises past the threshold, so `almost_full == 0` does not mean "there
+  is room" — F10 in `fifo_spec.md` spells out the consumer consequences.
+- **Open question — `ALMOST_FULL_THRESHOLD` *defaulting* to `DEPTH`.** Separate
+  from the settled `==` question above. The default makes `almost_full`
+  functionally identical to `full` unless a caller overrides the parameter.
+  Confirm this is intentional (e.g., a "safe" out-of-box default that callers
+  are expected to override) rather than an oversight. Either way it has a
+  verification cost: at the default, `==` and `>=` are indistinguishable, so
+  **the default instantiation alone cannot close F10**. At least one elaboration
+  with `ALMOST_FULL_THRESHOLD < DEPTH` must be in the regression, which is what
+  `cp_af_vs_full`'s `af_only`/`full_only` bins exist to force (§3).
 - **`DEPTH` should be small enough to hit F9 (pointer wrap) cheaply** in a
   directed test but a power of 2 to keep pointer/count logic simple to reason
   about in code review. `DEPTH=32` is now the spec default; `DEPTH=4` or `8` in
