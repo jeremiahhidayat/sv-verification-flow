@@ -25,8 +25,7 @@ mergeable metric. Every row below traces to a spec ID in `docs/fifo_spec.md`.
 | F15 | `test_reset_mid_burst` | `a_ptr_reset_stable` |
 | F16 | `test_read_pipeline_bubble` | `a_read_pipeline_no_bubble` |
 
-This is the matrix that should get screenshotted alongside the coverage report —
-it's the thing that answers "how do you know you're done" in one glance.
+This is the matrix that should be included in the coverage report. This helps track the functionalities that were checked. 
 
 ## 2. Fast tier — cocotb (`tb/cocotb/`)
 
