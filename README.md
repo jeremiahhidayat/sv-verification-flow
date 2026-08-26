@@ -91,7 +91,14 @@ make lint         # Verilator syntax check of RTL + SV testbench
 make questa       # Questa tier, a single run
 make regress      # seeds x elaborations, vcover merge, HTML report
 make coverage     # re-report from an existing merged UCDB
+
+make clean-questa # Questa artifacts only; needs no cocotb
+make clean-force  # same, killing processes still holding files open (NFS)
 ```
+
+On a Questa-only machine, `make clean` skips the fast tier rather than failing:
+`tb/cocotb/Makefile` includes cocotb's `Makefile.sim`, so it cannot be parsed at
+all without cocotb installed.
 
 Parameters forward to the Questa tier:
 
@@ -127,6 +134,11 @@ configuration alone cannot close `F10`.
 - **Questa exits `0` even when `$error` fired.** `tb/sv/Makefile`'s `check-log`
   requires the testbench's own pass banner *and* the absence of `** Error` or
   `** Fatal`.
+- **On NFS home directories, `rm` cannot unlink a file another process still has
+  open.** It renames it to `.nfsXXXXXX` and reports "Device or resource busy",
+  usually because a vsim from an aborted run, a GUI vsim, or a `tail -f` is
+  still holding a log. Use `make clean-force`, or keep the output off NFS with
+  `make regress OUT=/tmp/$USER-fifo-out`.
 
 ## Status
 

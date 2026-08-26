@@ -21,7 +21,8 @@ QUESTA_ARGS = WIDTH=$(WIDTH) DEPTH=$(DEPTH) \
               ALMOST_FULL_THRESHOLD=$(ALMOST_FULL_THRESHOLD) \
               NUM_TESTS=$(NUM_TESTS) SEED=$(SEED) SEEDS="$(SEEDS)"
 
-.PHONY: help sim lint questa questa-gui regress coverage check all clean clean-fast clean-questa
+.PHONY: help sim lint questa questa-gui regress coverage check all \
+        clean clean-fast clean-questa clean-force
 
 help:
 	@echo "fifo_almost_full_2cycle_read -- two-tier verification"
@@ -38,14 +39,29 @@ help:
 	@echo "  make coverage    re-report from the existing merged UCDB"
 	@echo ""
 	@echo "  make all         check + regress"
-	@echo "  make clean       clean both tiers"
+	@echo ""
+	@echo "  make clean         both tiers (fast tier skipped if cocotb absent)"
+	@echo "  make clean-questa  Questa tier only, no cocotb needed"
+	@echo "  make clean-force   Questa clean, killing processes still holding"
+	@echo "                     files open (NFS 'Device or resource busy')"
 	@echo ""
 	@echo "Parameter overrides (forwarded to the Questa tier):"
 	@echo "  WIDTH DEPTH ALMOST_FULL_THRESHOLD NUM_TESTS SEED SEEDS"
 	@echo "  e.g. make regress DEPTH=8 SEEDS=\"1 2 3 4 5\""
 
 # --- Fast tier -------------------------------------------------------------
+# tb/cocotb/Makefile includes cocotb's Makefile.sim via `cocotb-config`, so
+# without cocotb installed the include itself fails with an obscure error.
+# Check first and say something useful instead.
+HAVE_COCOTB = command -v cocotb-config >/dev/null 2>&1
+
 sim:
+	@$(HAVE_COCOTB) || { \
+	    echo "error: cocotb not found, so the fast tier cannot run here."; \
+	    echo "  install it:  python3 -m venv .venv && . .venv/bin/activate \\"; \
+	    echo "                 && pip install -r requirements.txt"; \
+	    echo "  or, on a Questa-only machine, use 'make questa' / 'make regress'."; \
+	    exit 1; }
 	$(MAKE) -C $(FAST_DIR) SIM=verilator
 
 # --- Questa tier -----------------------------------------------------------
@@ -72,10 +88,18 @@ check: lint sim
 all: check regress
 
 # --- Clean -----------------------------------------------------------------
-clean: clean-fast clean-questa
+# Always cleans the Questa tier. The fast tier is skipped rather than failing
+# when cocotb is absent, since its Makefile cannot even be parsed without it.
+clean: clean-questa
+	@$(HAVE_COCOTB) && $(MAKE) --no-print-directory clean-fast \
+	    || echo "clean: skipping fast tier (cocotb not installed)"
 
 clean-fast:
 	$(MAKE) -C $(FAST_DIR) clean
 
 clean-questa:
 	$(MAKE) -C $(QUESTA_DIR) clean
+
+# Questa clean that also kills processes still holding files open (NFS).
+clean-force:
+	$(MAKE) -C $(QUESTA_DIR) clean-force

@@ -87,6 +87,7 @@ help:
 	@echo "  report   re-generate the report from an existing merged UCDB"
 	@echo "  lint     Verilator syntax check (no Questa license needed)"
 	@echo "  clean    remove $(WORK)/ and $(OUT)/"
+	@echo "  clean-force  same, but kill processes still holding files (NFS)"
 
 # ---------------------------------------------------------------------------
 # Compile
@@ -194,5 +195,35 @@ lint:
 	    $(RTL) $(TB)
 	@echo "lint: OK"
 
+# On NFS, `rm` cannot unlink a file another process still has open. The client
+# renames it to .nfsXXXXXX instead and rm reports "Device or resource busy".
+# Usually the holder is a vsim from an aborted run, a GUI vsim, or a `tail -f`
+# on a log. Clean removes everything it can and reports what is left rather
+# than failing the build.
+#
+# To avoid it entirely, keep the output off NFS:
+#   make regress OUT=/tmp/$$USER-fifo-out
 clean:
-	rm -rf $(WORK) $(OUT) transcript vsim.wlf modelsim.ini *.ucdb
+	-@rm -rf $(WORK) transcript vsim.wlf *.ucdb 2>/dev/null
+	-@rm -f modelsim.ini 2>/dev/null
+	-@rm -rf $(OUT) 2>/dev/null
+	@if [ -d $(OUT) ]; then \
+	    echo "clean: $(OUT) not fully removed; these files are still open:"; \
+	    find $(OUT) -name '.nfs*' 2>/dev/null | sed 's/^/    /'; \
+	    echo "  find the holder:  fuser -v \$$(find $(OUT) -name '.nfs*')"; \
+	    echo "  or kill and retry: make clean-force"; \
+	    echo "  they also vanish on their own once the holding process exits."; \
+	else \
+	    echo "clean: ok"; \
+	fi
+
+# Kills only the processes holding files under $(OUT), then retries. This will
+# close a GUI vsim if you have one open on this directory.
+.PHONY: clean-force
+clean-force:
+	@if [ -d $(OUT) ]; then \
+	    echo "killing processes holding files under $(OUT):"; \
+	    find $(OUT) -name '.nfs*' -exec fuser -vk {} \; 2>&1 | sed 's/^/    /'; \
+	    sleep 1; \
+	fi
+	@$(MAKE) --no-print-directory clean
