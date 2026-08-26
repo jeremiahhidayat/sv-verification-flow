@@ -29,4 +29,26 @@ localparam int COUNT_WIDTH = $clog2(DEPTH) + 1;
 logic [COUNT_WIDTH-1:0] count_r, next_count, count_update;
 logic valid_wr, valid_rd;
 
+assign count = count_r;
+
+// Infer the RAM
+always_ff @(posedge clk) begin
+    if (valid_wr) ram[wr_addr_r] <= wr_data;
+    rd_data_ram <= ram[rd_addr_r];
+
+    // Register the RAM output for faster clocks.
+    rd_data <= rd_data_ram;
+end
+
+always_ff @(posedge clk or posedge rst) begin
+    if (rst) begin
+        rd_addr_r <= '0;
+        wr_addr_r <= '0;
+        count_r   <= '0;
+    end else begin
+        count_r <= next_count;
+        if (valid_wr) wr_addr_r <= wr_addr_r + 1'b1;
+        if (valid_rd) rd_addr_r <= rd_addr_r + 1'b1;
+    end
+end
 endmodule
