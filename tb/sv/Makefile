@@ -72,6 +72,13 @@ VLOG_TB_FLAGS  ?= -sv
 # and vopt would otherwise be free to collapse them.
 VOPTARGS ?= +acc
 
+# -onfinish stop is load-bearing. `vsim -c` defaults to -onfinish exit, so the
+# testbench's own $finish tears the simulator down before the -do script
+# reaches `coverage save`, and every run silently produces no UCDB -- passing
+# runs included. `stop` returns control to the do script with the design still
+# loaded, so coverage can be saved and `quit -f` then exits.
+VSIM_FLAGS ?= -c -coverage -onfinish stop -voptargs="$(VOPTARGS)"
+
 PARAMS = -gWIDTH=$(WIDTH) -gDEPTH=$(DEPTH) -gNUM_TESTS=$(NUM_TESTS)
 
 .PHONY: all comp sim gui regress merge report lint clean help
@@ -106,19 +113,20 @@ $(WORK)/_info: $(RTL) $(TB)
 # $(1) = run name, $(2) = almost-full threshold, $(3) = seed
 define run_one
 	@mkdir -p $(UCDB_DIR) $(LOG_DIR)
-	$(VSIM) -c -coverage -voptargs="$(VOPTARGS)" \
+	$(VSIM) $(VSIM_FLAGS) \
 	    -sv_seed $(3) $(PARAMS) -gALMOST_FULL_THRESHOLD=$(2) \
 	    -l $(LOG_DIR)/$(1).log \
 	    work.$(TOP) \
 	    -do "run -all; coverage save $(UCDB_DIR)/$(1).ucdb; quit -f"
-	@$(MAKE) --no-print-directory check-log LOG=$(LOG_DIR)/$(1).log
+	@$(MAKE) --no-print-directory check-log \
+	    LOG=$(LOG_DIR)/$(1).log UCDB=$(UCDB_DIR)/$(1).ucdb
 endef
 
 sim: comp
 	$(call run_one,aft$(ALMOST_FULL_THRESHOLD)_seed$(SEED),$(ALMOST_FULL_THRESHOLD),$(SEED))
 
 gui: comp
-	$(VSIM) -gui -coverage -voptargs="$(VOPTARGS)" \
+	$(VSIM) -gui -coverage -onfinish stop -voptargs="$(VOPTARGS)" \
 	    -sv_seed $(SEED) $(PARAMS) -gALMOST_FULL_THRESHOLD=$(ALMOST_FULL_THRESHOLD) \
 	    work.$(TOP) \
 	    -do "add wave -r /$(TOP)/*; run -all"
@@ -136,6 +144,12 @@ check-log:
 	    grep -E '\*\* (Error|Fatal)' $(LOG) | head -20; exit 1; \
 	elif ! grep -q '\*\*\* TEST PASSED \*\*\*' $(LOG) 2>/dev/null; then \
 	    echo "FAILED (no pass banner -- run died early?): $(LOG)"; exit 1; \
+	elif [ -n "$(UCDB)" ] && [ ! -f "$(UCDB)" ]; then \
+	    echo "FAILED (no UCDB written): $(UCDB)"; \
+	    echo "  The run passed but coverage was not saved. Usually the do"; \
+	    echo "  script never reached 'coverage save' because vsim exited on"; \
+	    echo "  the testbench's \$$finish -- check that -onfinish stop is set."; \
+	    exit 1; \
 	else \
 	    echo "PASS: $(LOG)"; \
 	fi
@@ -152,13 +166,14 @@ regress: comp
 	  for seed in $(SEEDS); do \
 	    name="aft$${aft}_seed$${seed}"; \
 	    echo "--- $$name ---"; \
-	    $(VSIM) -c -coverage -voptargs="$(VOPTARGS)" \
+	    $(VSIM) $(VSIM_FLAGS) \
 	        -sv_seed $$seed $(PARAMS) -gALMOST_FULL_THRESHOLD=$$aft \
 	        -l $(LOG_DIR)/$$name.log \
 	        work.$(TOP) \
 	        -do "run -all; coverage save $(UCDB_DIR)/$$name.ucdb; quit -f" \
 	        > /dev/null 2>&1; \
-	    if ! $(MAKE) --no-print-directory check-log LOG=$(LOG_DIR)/$$name.log; then \
+	    if ! $(MAKE) --no-print-directory check-log \
+	         LOG=$(LOG_DIR)/$$name.log UCDB=$(UCDB_DIR)/$$name.ucdb; then \
 	      fails=$$((fails + 1)); \
 	    fi; \
 	  done; \
@@ -172,7 +187,16 @@ regress: comp
 	exit $$fails
 
 merge:
-	@ls $(UCDB_DIR)/*.ucdb >/dev/null 2>&1 || { echo "no UCDBs in $(UCDB_DIR) -- run 'make regress' first"; exit 1; }
+	@ls $(UCDB_DIR)/*.ucdb >/dev/null 2>&1 || { \
+	    echo "no UCDBs in $(UCDB_DIR)."; \
+	    if [ -d $(LOG_DIR) ] && ls $(LOG_DIR)/*.log >/dev/null 2>&1; then \
+	        echo "Logs exist, so the runs happened but coverage was never saved."; \
+	        echo "Check that vsim was invoked with -onfinish stop: without it,"; \
+	        echo "the testbench's \$$finish exits vsim before the do script"; \
+	        echo "reaches 'coverage save'."; \
+	    else \
+	        echo "Run 'make regress' first."; \
+	    fi; exit 1; }
 	$(VCOVER) merge -out $(MERGED) $(UCDB_DIR)/*.ucdb
 
 report:

@@ -134,6 +134,11 @@ configuration alone cannot close `F10`.
 - **Questa exits `0` even when `$error` fired.** `tb/sv/Makefile`'s `check-log`
   requires the testbench's own pass banner *and* the absence of `** Error` or
   `** Fatal`.
+- **`vsim -c` needs `-onfinish stop` or no coverage is ever saved.** The default
+  is `-onfinish exit`, so the testbench's `$finish` tears the simulator down
+  before the `-do` script reaches `coverage save`. Runs look green and the UCDB
+  directory stays empty. `check-log` now fails a run whose UCDB is missing, so
+  this surfaces at the run rather than at the merge.
 - **On NFS home directories, `rm` cannot unlink a file another process still has
   open.** It renames it to `.nfsXXXXXX` and reports "Device or resource busy",
   usually because a vsim from an aborted run, a GUI vsim, or a `tail -f` is
