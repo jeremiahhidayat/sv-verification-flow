@@ -91,8 +91,12 @@ above stays checkable by grep, not by memory.
   cycles later equals the dequeued entry's stored data — covers F13. The
   first-priority new addition to cut under time pressure if the fast-tier
   `test_back_to_back_reads` already gives enough confidence here.
-- `a_read_pipeline_no_bubble`: no read accepted (or reset asserted) implies
-  `rd_data` does not change two cycles later — covers F16.
+- `a_read_pipeline_no_bubble`: no read accepted **and no reset in the
+  intervening window** implies `rd_data` does not change two cycles later —
+  covers F16. Deliberately excludes reset: since `rd_addr_r` resets to 0,
+  reset can change what `rd_data_ram`/`rd_data` pick up even with no accepted
+  read (F15) — that's expected, not a bubble, and is inconsequential under the
+  consumer contract in `fifo_spec.md` §3, not something to assert stability on.
 
 If time forces a cut per the prep plan's order (Step 8 → SVA → Step 7), cut
 `a_read_pipeline_no_bubble` first, then `a_read_latency` (both new, both
@@ -116,25 +120,32 @@ every seed, zero unjustified exclusions.
   across both testbenches — the cocotb scoreboard should sample `rd_data` two
   cycles after `rd_en` was accepted, not one, and any SVA that references
   `rd_data` should use `##2`, not `##1` or `|->`, relative to the accepted read.
-- **Open question — reset polarity/type.** The port renamed from `rst_n` to
-  `rst`. This spec assumes **active-high, synchronous** (consistent with the
-  rest of the spec's synchronous-reset design and the naming convention drop of
-  the `_n` suffix), but this has not been confirmed against a design doc or the
-  RTL body. Confirm before the reset tests/assertions are written — an
-  active-high assumption on an actually active-low signal would pass no tests
-  at all, which is easy to catch, but a sync-vs-async mismatch could pass
-  fast-tier and fail only in the Questa tier's tighter timing checks.
+- **Resolved — reset polarity/type: active-high, synchronous**, confirmed in
+  `rtl/fifo_almost_full_2cycle_read.sv` (`always_ff @(posedge clk) if (rst) ...`).
+  `a_ptr_reset_stable` and any other reset-referencing SVA should use `rst |=>`
+  with no separate async-deassertion test needed in cocotb, since there's no
+  async reset path in the RTL to race.
+- **Resolved — the entire read-data pipeline is intentionally excluded from
+  reset.** Neither `rd_data_ram` (RAM's own registered read output — real
+  memory macros have no reset pin) nor `rd_data` (the FIFO's own second
+  pipeline register, a plain flop that *could* be reset) is cleared by `rst`.
+  This is a deliberate consumer-contract decision, not an oversight: the FIFO
+  exposes no read-side "valid" signal, so a correct consumer only samples
+  `rd_data` on the cycle its own latency counter says data is real, and never
+  observes its reset-time value. `a_ptr_reset_stable` should therefore assert
+  only on `wr_ptr`/`rd_ptr`/`count`, and must **not** assert anything about
+  `rd_data`/`rd_data_ram` post-reset — a fast-tier test that checked
+  `rd_data == 0` right after `test_reset` would be asserting a guarantee the
+  design does not make. F16's bubble-holding behavior on `rd_data_ram` comes
+  for free from the unmoved read address, not from a reset or enable — worth a
+  targeted test (`test_read_pipeline_bubble`) rather than an SVA, since it's a
+  consequence of address stability, not an explicit rule.
 - **Open question — `ALMOST_FULL_THRESHOLD` default equals `DEPTH`.** This makes
   `almost_full` functionally identical to `full` unless a caller overrides the
   parameter. Confirm this is intentional (e.g., a "safe" out-of-box default that
   callers are expected to override) rather than an oversight, since it changes
   what the default-instantiation `cp_occupancy` almost-full bin actually
   exercises.
-- **Open question — read-pipeline bubble semantics (F16).** Assumed: a cycle
-  with no accepted read (or a reset) does not push a bubble into either read
-  pipeline stage, i.e. `rd_data` simply holds. Confirm this against the RTL body
-  once available, particularly around reset-mid-flight (F15) clearing in-flight
-  pipeline stages rather than letting them drain stale data into `rd_data`.
 - **`DEPTH` should be small enough to hit F9 (pointer wrap) cheaply** in a
   directed test but a power of 2 to keep pointer/count logic simple to reason
   about in code review. `DEPTH=32` is now the spec default; `DEPTH=4` or `8` in

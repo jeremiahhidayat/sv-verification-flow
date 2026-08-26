@@ -22,7 +22,7 @@ the module no longer exposes an almost-empty indicator.
 | Signal | Dir | Width | Description |
 |---|---|---|---|
 | `clk` | in | 1 | Clock. All activity is synchronous to the rising edge. |
-| `rst` | in | 1 | **Active-high**, synchronous reset (assumed — see §4 open question; polarity flipped from `rst_n` in earlier revisions of this spec). |
+| `rst` | in | 1 | **Active-high, synchronous** reset (confirmed in RTL; polarity flipped from `rst_n` in earlier revisions of this spec). |
 | `wr_en` | in | 1 | Write request. Qualified by `full`. |
 | `wr_data` | in | `WIDTH` | Write data. |
 | `rd_en` | in | 1 | Read request. Qualified by `empty`. |
@@ -40,21 +40,39 @@ is added to the corner-case list in §4.
 ## 3. Reset Behavior
 
 - While `rst == 1`: on the next rising edge, write pointer, read pointer, and
-  `count` are cleared to 0. This also flushes the two-stage read pipeline (see
-  F16) so no stale data can reach `rd_data` post-reset.
-- After reset deasserts: `empty == 1`, `full == 0`, `almost_full == 0`, `rd_data`
-  is undefined until the first successful read reaches the second pipeline stage
-  (two cycles after acceptance, per F13).
+  `count` are cleared to 0.
+- **Neither read-pipeline stage (`rd_data_ram` nor the externally-visible
+  `rd_data`) is reset**, by design. `rd_data_ram` models a real memory macro's
+  registered read output, which has no reset pin in silicon; `rd_data` is a
+  plain flop and technically could be reset, but the contract with the
+  consumer makes it unnecessary — see below.
+- The consumer contract: this FIFO exposes no explicit "data valid" signal on
+  the read side. A consumer is expected to know the fixed 2-cycle latency (F13)
+  and only sample `rd_data` on the cycle its own accepted-read count says data
+  has arrived. Under that contract, `rd_data`'s value is never sampled before
+  the first legitimate post-reset read matures, so its reset-time value is
+  irrelevant to correctness — it can hold stale or unknown (`X` in simulation)
+  data indefinitely without being observed. Both pipeline registers are
+  data-plane only (neither feeds back into `valid_wr`/`valid_rd`/pointers/
+  `count`), so unlike the pointer/count reset, there is no risk of undefined
+  state propagating into control logic.
+- After reset deasserts: `empty == 1`, `full == 0`, `almost_full == 0`.
+  `rd_data`/`rd_data_ram` remain whatever they held pre-reset until the first
+  successful post-reset read overwrites them (two cycles after acceptance, per
+  F13) — this is the same "undefined until first successful read" behavior as
+  a cold power-up, just re-triggered by any `rst` pulse, not only the initial
+  one.
 - `wr_en`/`rd_en` asserted during reset are ignored — no write or read is committed.
 - Reset may assert at any point, including mid-burst with entries stored or
-  in-flight in the read pipeline; pointers, count, and both read pipeline stages
-  must clear regardless of prior occupancy (see F15, "pointer stability under
-  reset").
+  in-flight in the read pipeline; pointers and count must clear regardless of
+  prior occupancy (see F15, "pointer stability under reset").
 
 ## 4. Numbered Behaviors
 
-- **F1** — Reset clears `count`, write pointer, read pointer, and both read
-  pipeline stages to 0; `empty=1`, `full=0`.
+- **F1** — Reset clears `count`, write pointer, and read pointer to 0;
+  `empty=1`, `full=0`. `rd_data`/`rd_data_ram` are deliberately **not** cleared
+  by reset (see §3) — the fixed-latency, no-valid-signal consumer contract
+  means their reset-time value is never observed.
 - **F2** — A write is committed iff `wr_en==1 && full==0`. Data is stored at the
   write pointer; the write pointer increments and wraps modulo `DEPTH`.
 - **F3** — A read is committed iff `rd_en==1 && empty==0`; the read pointer
@@ -96,10 +114,16 @@ is added to the corner-case list in §4.
 - **F14** — Ordering: entries are returned in strict FIFO (first-in, first-out)
   order under any legal interleaving of writes and reads, including at the
   boundary conditions in F6–F8.
-- **F15** — Reset asserted mid-burst (nonzero occupancy, and/or data in flight in
-  the read pipeline) clears pointers, `count`, and both pipeline stages
-  regardless of prior state (see §3).
-- **F16** — Read pipeline bubbles: in any cycle where no read is accepted (F5) or
-  reset is asserted, no data advances into either read-pipeline stage; a stage
-  with no valid data flowing into it holds rather than propagating a bubble that
-  could show up as spurious/garbage data on `rd_data` two cycles later.
+- **F15** — Reset asserted mid-burst (nonzero occupancy, and/or data in flight
+  in the read pipeline) clears pointers and `count` regardless of prior state.
+  Whatever was in flight in `rd_data_ram`/`rd_data` at the moment of reset is
+  left as-is (see §3) — this is safe because the consumer contract means that
+  data was never going to be sampled without the pointer/`count` state that
+  reset also clears, so a consumer cannot mistake leftover in-flight data for a
+  new valid read.
+- **F16** — Read pipeline bubbles: in any cycle where no read is accepted (F5),
+  `rd_data_ram` re-reads the same (unmoved) `ram` address rather than advancing,
+  so it holds its value; `rd_data` likewise only updates when the prior cycle
+  fed it real `rd_data_ram` content. Neither stage propagates a bubble that
+  could show up as spurious/garbage data on `rd_data` — and per §3, even if it
+  did, the consumer contract means it would go unobserved.
