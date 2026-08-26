@@ -14,7 +14,7 @@ mergeable metric. Every row below traces to a spec ID in `docs/fifo_spec.md`.
 | F4 | `test_fill_to_full`, `test_write_while_full_no_read` | `a_no_overflow` |
 | F5 | `test_drain_to_empty`, `test_read_while_empty_no_write` | `a_no_underflow` |
 | F6 | `test_simultaneous_rw_mid` | `cx_wr_rd_full_empty` bin `wr&rd, !full, !empty` |
-| F7 | `test_simultaneous_rw_at_full` | `cx_wr_rd_full_empty` bin `wr&rd, full`; `a_no_overflow` |
+| F7 | `test_simultaneous_rw_at_full` (write dropped, `count`→`DEPTH-1`) | `cx_wr_rd_full_empty` bin `wr&rd, full`; `a_no_overflow` |
 | F8 | `test_simultaneous_rw_at_empty` | `cx_wr_rd_full_empty` bin `wr&rd, empty`; `a_no_underflow` |
 | F9 | `test_pointer_wrap` (≥2 wraps) | `cp_occupancy` crossed with wrap count |
 | F10 | `test_almost_full_threshold` | `cp_occupancy` threshold-1/threshold/threshold+1 bins; `cp_af_vs_full` |
@@ -161,6 +161,19 @@ sub-`DEPTH` threshold — or `cp_af_vs_full` cannot close (§4). Signoff target:
   for free from the unmoved read address, not from a reset or enable — worth a
   targeted test (`test_read_pipeline_bubble`) rather than an SVA, since it's a
   consequence of address stability, not an explicit rule.
+- **Resolved — F7: a write attempted while `full` is dropped even when a read
+  commits in the same cycle.** `valid_wr = wr_en && !full` is unconditional, so
+  the slot the read frees is not available to the write until the next cycle;
+  `count` goes to `DEPTH-1` and settles there under sustained simultaneous
+  read/write. Earlier revisions of `fifo_spec.md` described the write committing
+  into the freed slot. The RTL is authoritative and F7 has been corrected.
+  **Both reference models must derive write acceptance from the spec rule, not
+  by copying `valid_wr` out of the RTL.** This was found by the Questa tier's
+  directed `test_simultaneous_rw_at_full`, and *only* by it: the SV reference
+  model had `acc_wr = wr_en && !full` copied from the RTL, so its every-cycle
+  `count` check agreed with the DUT and stayed silent, and `a_no_overflow` is
+  qualified on `!rd_en` so it never evaluated this case. A model that inherits
+  the implementation's acceptance rule cannot detect a bug in that rule.
 - **Resolved — `almost_full` is exact-match (`count == ALMOST_FULL_THRESHOLD`),
   not `count >= ALMOST_FULL_THRESHOLD`.** The RTL (`rtl/...sv`) is authoritative
   here; earlier revisions of `fifo_spec.md` worded F10 as `>=` and have been

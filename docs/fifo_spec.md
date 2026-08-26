@@ -81,17 +81,27 @@ is added to the corner-case list in §4.
   cycles later (F13) — occupancy accounting (F4–F12) is independent of that
   output pipeline delay.
 - **F4** — `full` is asserted iff `count == DEPTH`. A write attempted while `full`
-  and no simultaneous read is committed (dropped) and does not corrupt stored data
-  or advance the write pointer.
-- **F5** — `empty` is asserted iff `count == 0`. A read attempted while `empty` and
-  no simultaneous write is committed (dropped); the read pointer does not advance
-  and no data enters the read pipeline (see F16); `rd_data` holds its previous
-  value.
+  is dropped, with or without a simultaneous read (see F7), and does not corrupt
+  stored data or advance the write pointer.
+- **F5** — `empty` is asserted iff `count == 0`. A read attempted while `empty` is
+  dropped, with or without a simultaneous write (see F8); the read pointer does
+  not advance and no data enters the read pipeline (see F16); `rd_data` holds its
+  previous value.
 - **F6** — Simultaneous `wr_en && rd_en` while neither full nor empty: both commit
   in the same cycle; `count` is unchanged; both pointers advance.
-- **F7** — Simultaneous `wr_en && rd_en` while `full`: the read commits (frees a
-  slot) and the write commits into that freed slot in the same cycle; `count`
-  remains `DEPTH`; no overflow occurs.
+- **F7** — Simultaneous `wr_en && rd_en` while `full`: the read commits and the
+  write is **dropped**; `count` becomes `DEPTH-1`. Writes are qualified by
+  `!full` unconditionally (`valid_wr = wr_en && !full`), so a read freeing a
+  slot in the same cycle does not open one for the write. Earlier revisions of
+  this spec described the write committing into the freed slot; the RTL is
+  authoritative and that wording has been corrected.
+  What this costs: under sustained simultaneous read/write starting from full,
+  occupancy settles at `DEPTH-1` and stays there. That is one slot of effective
+  depth, not throughput, since after the first cycle the FIFO is no longer full
+  and both accesses commit every cycle from then on. No data is lost either,
+  because a producer sees `full` asserted and holds. The benefit is that the
+  write-enable path stays a pure function of `count_r` and never depends on
+  `valid_rd`.
 - **F8** — Simultaneous `wr_en && rd_en` while `empty`: the write commits; the read
   is dropped (there is nothing valid to dequeue this cycle); `count` becomes 1.
 - **F9** — Write and read pointers wrap modulo `DEPTH` independently; occupancy is
