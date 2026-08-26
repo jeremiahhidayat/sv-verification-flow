@@ -243,11 +243,26 @@ module fifo_almost_full_2cycle_read_tb #(
                 exp_v2 = exp_v1;
                 exp_d2 = exp_d1;
 
-                acc_rd = rd_en && !empty;  // F3, and the F8 drop-at-empty rule
-                acc_wr = wr_en && !full;   // F2, and the F4 drop-at-full rule
+                // Acceptance is unconditional in both directions: a read at
+                // empty is dropped whether or not a write commits (F5/F8), and
+                // a write at full is dropped whether or not a read commits
+                // (F4/F7). Neither qualifier depends on the other.
+                //
+                // These two lines look identical to the RTL's valid_rd/valid_wr
+                // and must NOT be maintained by copying them from it -- they
+                // encode the spec rule, which happens to agree. A model that
+                // inherits its acceptance rule from the implementation cannot
+                // detect a bug in that rule; see verification_plan.md Sec.4,
+                // where exactly that hid an F7 mismatch from every per-cycle
+                // check in this file.
+                acc_rd = rd_en && !empty;  // F3/F5/F8
+                acc_wr = wr_en && !full;   // F2/F4/F7
 
-                // Pop before push so F7 (simultaneous r/w while full) frees the
-                // slot the write then occupies, leaving count == DEPTH.
+                // Both decisions are made from the flags sampled above, before
+                // the queue is touched, so the pop/push order below does not
+                // affect the result. That ordering-independence is what makes
+                // F6/F7/F8 fall out of the same two lines rather than needing
+                // three special cases.
                 exp_v1 = 1'b0;
                 if (acc_rd) begin
                     exp_v1 = 1'b1;
@@ -506,19 +521,26 @@ module fifo_almost_full_2cycle_read_tb #(
         apply_reset();
         fill(DEPTH);
         expect_state("test_simultaneous_rw_at_full (setup)", DEPTH);
+
+        // First simultaneous access while full: the read commits, the write is
+        // dropped. valid_wr is qualified by !full unconditionally, so the slot
+        // the read frees is not available to the write until the next cycle.
+        drive_cycle(1'b1, 1'b1, next_data());
+        wr_en <= 1'b0;
+        rd_en <= 1'b0;
+        expect_state("test_simultaneous_rw_at_full (write dropped at full)", DEPTH - 1);
+
+        // From here the FIFO is no longer full, so both accesses commit every
+        // cycle and occupancy holds at DEPTH-1. One slot of effective depth is
+        // the entire cost of the F7 rule; throughput is unaffected.
         for (int i = 0; i < DEPTH; i++) begin
             drive_cycle(1'b1, 1'b1, next_data());
             wr_en <= 1'b0;
             rd_en <= 1'b0;
-            // The read frees a slot and the write takes it in the same cycle:
-            // count stays at DEPTH and no overflow occurs.
-            expect_state("test_simultaneous_rw_at_full", DEPTH);
-            wr_en <= 1'b1;
-            rd_en <= 1'b1;
+            expect_state("test_simultaneous_rw_at_full (steady state)", DEPTH - 1);
         end
-        wr_en <= 1'b0;
-        rd_en <= 1'b0;
-        drain(DEPTH);  // ordering of the swapped-through data is checked by the scoreboard (F14)
+
+        drain(DEPTH - 1);  // ordering of the swapped-through data is checked by the scoreboard (F14)
         end_test();
     endtask
 
