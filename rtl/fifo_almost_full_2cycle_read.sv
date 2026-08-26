@@ -2,8 +2,8 @@
 // Description: FIFO with a 2 cycle read to improve performance
 
 module fifo_almost_full_2cycle_read #(
-    parameter WIDTH = 8,
-    parameter DEPTH = 32,
+    parameter int WIDTH = 8,
+    parameter int DEPTH = 32,
     parameter int ALMOST_FULL_THRESHOLD = DEPTH
 ) (
 
@@ -51,4 +51,24 @@ always_ff @(posedge clk or posedge rst) begin
         if (valid_rd) rd_addr_r <= rd_addr_r + 1'b1;
     end
 end
+
+    // Update the count by 1, -1, or 0. 
+    // Using the optimization given by Stitt for counters
+always_comb begin
+    case ({
+        valid_wr, valid_rd
+    })
+        2'b10:   count_update = COUNT_WIDTH'(1);
+        2'b01:   count_update = '1; // negative 1
+        default: count_update = '0;
+    endcase
+    next_count = count_r + count_update;
+end
+
+assign valid_wr = wr_en && !full;
+assign valid_rd = rd_en && !empty;
+assign almost_full = count_r == ALMOST_FULL_THRESHOLD;
+assign full = count_r == DEPTH;
+assign empty = count_r == 0;
+
 endmodule
