@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VERILATOR_VERSION: v5.051
+
+jobs:
+  fast-tier:
+    name: Fast tier (cocotb + Verilator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install cocotb
+        run: pip install -r requirements.txt
+
+      # apt's Verilator is too old for cocotb 2.0.1 (needs >=5.036), so build
+      # from source. Cached and keyed on VERILATOR_VERSION so this only runs
+      # on a version bump, not every push.
+      - name: Cache Verilator build
+        id: cache-verilator
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.verilator-install
+          key: verilator-${{ env.VERILATOR_VERSION }}-${{ runner.os }}
+
+      - name: Install Verilator build dependencies
+        if: steps.cache-verilator.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git help2man perl python3 make autoconf g++ flex bison ccache \
+            libgoogle-perftools-dev numactl perl-doc libfl2 libfl-dev zlib1g-dev
+
+      - name: Build and install Verilator ${{ env.VERILATOR_VERSION }}
+        if: steps.cache-verilator.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$VERILATOR_VERSION" https://github.com/verilator/verilator.git /tmp/verilator-src
+          cd /tmp/verilator-src
+          autoconf
+          ./configure --prefix="${{ github.workspace }}/.verilator-install"
+          make -j"$(nproc)"
+          make install
+
+      - name: Add Verilator to PATH
+        run: echo "${{ github.workspace }}/.verilator-install/bin" >> "$GITHUB_PATH"
+
+      - name: Verify toolchain versions
+        run: |
+          verilator --version
+          cocotb-config --version
+
+      - name: Run fast-tier regression
+        run: make sim
+
+      - name: Upload cocotb results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cocotb-results
+          path: tb/cocotb/results.xml
+          if-no-files-found: warn

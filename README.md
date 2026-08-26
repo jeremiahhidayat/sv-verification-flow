@@ -17,21 +17,23 @@ something GitHub Actions can reach.
       (non-FWFT) read data, numbered behaviors F1–F14
 - [x] Verification plan written (`docs/verification_plan.md`): traceability
       matrix from spec ID to fast-tier test to Questa covergroup/assertion
-- [ ] RTL (`rtl/fifo.sv`)
-- [ ] Fast tier: cocotb tests (`tb/cocotb/`)
-- [ ] CI (`.github/workflows/ci.yml`)
+- [x] RTL (`rtl/fifo_almost_full_2cycle_read.sv`)
+- [x] Fast tier: cocotb tests (`tb/cocotb/`)
+- [x] CI (`.github/workflows/ci.yml`) — written, not yet confirmed green on
+      Actions (see "Running the tests" below for the one-time setup needed)
 - [ ] Questa tier: SVA + coverage (`tb/sv/`)
 
 ## Repo layout
 
 ```
-rtl/fifo.sv          RTL under verification
+rtl/fifo_almost_full_2cycle_read.sv   RTL under verification
 docs/fifo_spec.md    Interface, reset behavior, numbered spec (F1–F14)
 docs/verification_plan.md   Spec-ID -> test -> coverage/assertion traceability
 tb/cocotb/           Fast tier: cocotb + Verilator, PR-gated
 tb/sv/               Questa tier: SVA + functional coverage, run on department
                      license servers (not reachable from CI)
-.github/workflows/ci.yml
+.github/workflows/ci.yml   Builds Verilator, installs cocotb, runs tb/cocotb/
+requirements.txt     Pinned cocotb version (kept in sync with local venv)
 Makefile
 ```
 
