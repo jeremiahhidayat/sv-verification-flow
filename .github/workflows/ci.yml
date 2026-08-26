@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  VERILATOR_VERSION: v5.051
+  VERILATOR_VERSION: v5.050
 
 jobs:
   fast-tier:
