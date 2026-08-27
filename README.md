@@ -113,6 +113,17 @@ as seeds. That is not optional: the parameter is elaboration-time, and at its
 `DEPTH` default `almost_full` is indistinguishable from `full`, so the default
 configuration alone cannot close `F10`.
 
+## Coverage
+
+`make regress` (3 seeds x 3 `ALMOST_FULL_THRESHOLD` elaborations) closes
+`cg_fifo` at 98.14% (45/46 bins), with every coverpoint — including
+`cp_af_vs_full`, the one that needs the sub-`DEPTH` sweep to be reachable at
+all — at 100%:
+
+![Questa covergroup coverage report](docs/images/questa_coverage_report.png)
+
+Full report: `tb/sv/out/covhtml/index.html` (regenerate with `make coverage`).
+
 ## Gotchas
 
 - **`almost_full` is exact-match** (`count == ALMOST_FULL_THRESHOLD`), not
@@ -164,10 +175,10 @@ configuration alone cannot close `F10`.
 
 - [x] Spec, verification plan, RTL
 - [x] CI green, ~45 s per run (three elaborations)
-- [x] Questa tier: testbench, covergroups and 5 SVA written; the flow runs
-      against a real license. Its first run found a spec/RTL mismatch on `F7`,
-      since corrected in the spec. Not yet re-run to completion, and
-      `make regress` (the multi-threshold sweep) has never run.
+- [x] Questa tier: testbench, covergroups and 5 SVA written and run against a
+      real license. Its first run found a spec/RTL mismatch on `F7`, since
+      corrected in the spec. `make regress` (3 seeds x 3 `ALMOST_FULL_THRESHOLD`
+      elaborations) now runs clean: `cg_fifo` at 98.14%, see Coverage above.
 - [x] Fast tier: all 14 tests from `docs/verification_plan.md` §2, same names
       as the Questa tier, each checking the DUT against a spec-derived reference
       model every cycle. 14/14 pass at each of the three elaborations in
@@ -188,8 +199,9 @@ is unresolved. See `docs/verification_plan.md` §4.
 
 ## Next steps
 
-1. Re-run the Questa tier now that `F7` is corrected, then `make regress` for
-   the threshold sweep. The sub-`DEPTH` elaborations have never run.
+1. Root-cause the one missed bin in `cg_fifo` (45/46, see Coverage above) and
+   either close it with a targeted seed/directed test or document why it's
+   unreachable.
 2. Cross-check the two tiers on the same failing configuration now that they
    share parameter names, and reconcile any behavior only one of them sees.
 3. Resolve the open question above. When the spec and RTL disagree, fix the spec
