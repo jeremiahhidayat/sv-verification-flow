@@ -76,13 +76,18 @@ jobs:
           verilator --version
           cocotb-config --version
 
-      - name: Run fast-tier regression
-        run: make sim
+      # The sweep, not a single run: ALMOST_FULL_THRESHOLD defaults to DEPTH,
+      # and at that value an exact-match almost_full is indistinguishable from
+      # a threshold-and-above one, so the default elaboration alone cannot
+      # close F10. Mutating the RTL to `>=` passes 14/14 at the default and
+      # fails 7/14 at DEPTH/2 -- the sweep is what makes the gate meaningful.
+      - name: Run fast-tier regression (threshold sweep)
+        run: make sim-sweep
 
       - name: Upload cocotb results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: cocotb-results
-          path: tb/cocotb/results.xml
+          path: tb/cocotb/results_*.xml
           if-no-files-found: warn

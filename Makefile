@@ -21,15 +21,22 @@ QUESTA_ARGS = WIDTH=$(WIDTH) DEPTH=$(DEPTH) \
               ALMOST_FULL_THRESHOLD=$(ALMOST_FULL_THRESHOLD) \
               NUM_TESTS=$(NUM_TESTS) SEED=$(SEED) SEEDS="$(SEEDS)"
 
-.PHONY: help sim lint questa questa-gui regress coverage check all \
+# The same knobs drive both tiers, so a configuration that fails in one can
+# be reproduced in the other without translating parameter names.
+FAST_ARGS = WIDTH=$(WIDTH) DEPTH=$(DEPTH) \
+            ALMOST_FULL_THRESHOLD=$(ALMOST_FULL_THRESHOLD) \
+            NUM_TESTS=$(NUM_TESTS) SEED=$(SEED)
+
+.PHONY: help sim sim-sweep lint questa questa-gui regress coverage check all \
         clean clean-fast clean-questa clean-force
 
 help:
 	@echo "fifo_almost_full_2cycle_read -- two-tier verification"
 	@echo ""
-	@echo "  make sim         fast tier: cocotb + Verilator (target: clean in <30s)"
+	@echo "  make sim         fast tier: cocotb + Verilator, one elaboration"
+	@echo "  make sim-sweep   fast tier over ALMOST_FULL_THRESHOLD {1, DEPTH/2, DEPTH}"
 	@echo "  make lint        Verilator syntax check of RTL + SV testbench"
-	@echo "  make check       lint + sim -- the pre-push gate, no Questa needed"
+	@echo "  make check       lint + sim-sweep -- the pre-push gate, no Questa needed"
 	@echo ""
 	@echo "  make questa      Questa tier: one run (SEED=$(SEED),"
 	@echo "                   ALMOST_FULL_THRESHOLD=$(ALMOST_FULL_THRESHOLD))"
@@ -62,7 +69,17 @@ sim:
 	    echo "                 && pip install -r requirements.txt"; \
 	    echo "  or, on a Questa-only machine, use 'make questa' / 'make regress'."; \
 	    exit 1; }
-	$(MAKE) -C $(FAST_DIR) SIM=verilator
+	$(MAKE) -C $(FAST_DIR) SIM=verilator $(FAST_ARGS)
+
+# Sweeps the elaboration space the way `make regress` does for the Questa tier.
+# Not a luxury: ALMOST_FULL_THRESHOLD defaults to DEPTH, and at that value an
+# exact-match almost_full is indistinguishable from a threshold-and-above one,
+# so the default elaboration alone cannot close F10. Measured rather than
+# assumed: mutating the RTL to `>=` passes 14/14 at the default and fails
+# 7/14 at DEPTH/2.
+sim-sweep:
+	@$(HAVE_COCOTB) || { echo "error: cocotb not found, so the fast tier cannot run here."; exit 1; }
+	$(MAKE) -C $(FAST_DIR) sweep SIM=verilator $(FAST_ARGS)
 
 # --- Questa tier -----------------------------------------------------------
 questa:
@@ -83,7 +100,7 @@ coverage:
 lint:
 	$(MAKE) -C $(QUESTA_DIR) lint
 
-check: lint sim
+check: lint sim-sweep
 
 all: check regress
 

@@ -70,9 +70,38 @@ Tests (each asserts against the reference model every cycle, not just at checkpo
 11. `test_random_stress` — randomized `wr_en`/`rd_en`/data vs. reference model,
     run with a fixed seed logged on failure for reproducibility
 
-Target: `make sim` clean under 30s (per prep plan Step 3), all 11+ tests, each
-tagged with the spec IDs it covers in its docstring so the traceability matrix
-above stays checkable by grep, not by memory.
+Implemented in `tb/cocotb/test_fifo.py` as 14 tests carrying the same names as
+the Questa tier, so a spec ID is covered by the same-named test on both sides.
+Each docstring opens with a machine-greppable `Spec: F..` line -- the Python
+equivalent of `begin_test(name, specs)` -- so the matrix above stays checkable
+by grep, not by memory.
+
+Driver, reference model and checker are one loop rather than a forked monitor:
+every cycle of stimulus is checked, and no monitor can sample an input the test
+has already overwritten. The DUT is read at the *falling* edge, because cocotb
+resumes from `RisingEdge` before that edge's non-blocking updates have landed.
+Under that convention the expectation pipeline is one stage deep where the SVA
+writes `##2`; both describe the same two registers, and the difference is only
+whether the sample is taken pre- or post-edge.
+
+Runtime: ~45s cold for `make sim-sweep` (three elaborations, mostly Verilator
+compile), under a second of simulation each.
+
+**Validated by mutation, not by passing.** Seven bugs injected into the RTL are
+each caught by the suite: `almost_full` using `>=`, a write committing into the
+slot a read frees (the old F7 wording), a read pipeline shortened to one cycle,
+a reset that clears the pointers but not `count`, `full` asserting one entry
+early, an accepted read that fails to decrement `count`, and write data latched
+without qualifying on `wr_en`. Two results are worth recording:
+
+- The F7 mutation is caught by only **2 of 14** tests, one of them the directed
+  `test_simultaneous_rw_at_full`. That is the same asymmetry that let the real
+  bug hide from the Questa tier's every-cycle checks (§4) -- directed tests are
+  not redundant with a reference model when the model can inherit the bug.
+- The `almost_full` `>=` mutation passes **14/14 at the `DEPTH` default**, fails
+  7/14 at `DEPTH/2` and 12/14 at `1`. This is the measured version of §4's claim
+  that the default instantiation cannot close F10, and it is why `make check`
+  runs the sweep rather than a single elaboration.
 
 ## 3. Questa tier — coverage + assertions (`tb/sv/`)
 

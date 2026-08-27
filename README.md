@@ -10,7 +10,7 @@ numbered requirement, and two toolchains check the design at different speeds.
 |---|---|---|
 | Tools | cocotb + Verilator | Questa (SVA + functional coverage) |
 | Where | Every push, GitHub Actions | Department license server |
-| Runtime | ~36 s | Minutes, multi-seed |
+| Runtime | ~45 s (3 elaborations) | Minutes, multi-seed |
 | Answers | "Did I break something?" | "Am I done?" |
 
 The fast tier is a regression net. It runs on every push and fails while you
@@ -84,8 +84,9 @@ still works.
 ## Commands
 
 ```bash
-make check        # lint + fast tier, the pre-push gate, no license needed
-make sim          # fast tier only
+make check        # lint + sim-sweep, the pre-push gate, no license needed
+make sim          # fast tier, one elaboration -- the inner loop
+make sim-sweep    # fast tier over ALMOST_FULL_THRESHOLD {1, DEPTH/2, DEPTH}
 make lint         # Verilator syntax check of RTL + SV testbench
 
 make questa       # Questa tier, a single run
@@ -131,6 +132,20 @@ configuration alone cannot close `F10`.
   write-acceptance rule was copied from the RTL, so it agreed with the DUT and
   stayed silent while F7 was wrong. Only a directed test's hardcoded expectation
   caught it.
+- **Verilator's VPI reports a parameter's declared default, not the elaborated
+  `-G` override.** `dut.DEPTH.value` reads `32` in a build whose `almost_full`
+  compare folded to `4U == count_r`, because Verilator constant-folds parameters
+  out of the model entirely. A testbench that cross-checks its configuration by
+  reading parameters will produce false failures; `tb/cocotb/test_fifo.py`
+  checks signal *widths* instead, which survive the folding.
+- **`SIM_BUILD ?=` cannot override cocotb's exported value.** `Makefile.inc`
+  exports `SIM_BUILD` and `COCOTB_RESULTS_FILE`, so under a recursive `make`
+  they are already set in the sub-make's environment and `?=` leaves them alone.
+  Every iteration of a parameter sweep then shares the first one's build
+  directory, finds `Vtop.mk` present with unchanged sources, skips the rebuild,
+  and silently re-runs the first elaboration's binary against the next
+  elaboration's expectations -- a sweep that looks like it ran and did not. Use
+  `:=`, which still loses to a command-line override.
 - **Questa exits `0` even when `$error` fired.** `tb/sv/Makefile`'s `check-log`
   requires the testbench's own pass banner *and* the absence of `** Error` or
   `** Fatal`.
@@ -148,16 +163,22 @@ configuration alone cannot close `F10`.
 ## Status
 
 - [x] Spec, verification plan, RTL
-- [x] CI green, ~36 s per run
+- [x] CI green, ~45 s per run (three elaborations)
 - [x] Questa tier: testbench, covergroups and 5 SVA written; the flow runs
       against a real license. Its first run found a spec/RTL mismatch on `F7`,
       since corrected in the spec. Not yet re-run to completion, and
       `make regress` (the multi-threshold sweep) has never run.
-- [ ] Fast tier: 4 of the 11 planned tests written. `test_write_then_read`,
-      `test_reset`, `test_fill_to_full` and `test_drain_to_empty` pass. The
-      corner cases that matter most (`F6`–`F8` simultaneous read/write, `F9`
-      pointer wrap, `F15` reset mid-burst, `F16` pipeline bubbles) are planned
-      but not implemented.
+- [x] Fast tier: all 14 tests from `docs/verification_plan.md` §2, same names
+      as the Questa tier, each checking the DUT against a spec-derived reference
+      model every cycle. 14/14 pass at each of the three elaborations in
+      `make sim-sweep`.
+- [x] Fast tier validated by mutation: seven injected RTL bugs (`>=` for `==` on
+      `almost_full`, a write committing into a read's freed slot, a shortened
+      read pipeline, reset missing `count`, `full` one entry early, a read that
+      does not decrement `count`, unqualified write data) are each caught. The
+      F7 mutation is caught by only two tests, one of them the directed
+      `test_simultaneous_rw_at_full` — the same asymmetry that let the real bug
+      hide from the Questa tier's per-cycle checks.
 
 ### Open question
 
@@ -169,8 +190,8 @@ is unresolved. See `docs/verification_plan.md` §4.
 
 1. Re-run the Questa tier now that `F7` is corrected, then `make regress` for
    the threshold sweep. The sub-`DEPTH` elaborations have never run.
-2. Finish the fast tier from the list in `docs/verification_plan.md` §2,
-   starting with `test_simultaneous_rw_at_full` and `_at_empty`.
+2. Cross-check the two tiers on the same failing configuration now that they
+   share parameter names, and reconcile any behavior only one of them sees.
 3. Resolve the open question above. When the spec and RTL disagree, fix the spec
    if the RTL is right; that has already happened twice here, on `almost_full`
    and on `F7`.
